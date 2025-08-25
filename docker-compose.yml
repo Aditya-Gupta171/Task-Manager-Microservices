@@ -1,0 +1,109 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-todo_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis-stack:
+    image: redis/redis-stack:latest
+    ports:
+      - "6379:6379"  # Redis port
+      - "8001:8001"  # RedisInsight port
+    volumes:
+      - redis_data:/data
+    networks:
+      - todo-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-stack:
+        condition: service_healthy
+    environment:
+      - PORT=${AUTH_PORT:-3000}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-todo_db}
+      - REDIS_HOST=redis-stack
+      - REDIS_PORT=6379
+      - JWT_SECRET=${JWT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+    volumes:
+      - ./auth-service:/app
+      - /app/node_modules
+    networks:
+      - todo-network
+
+  task-service:
+    build:
+      context: ./task-service
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-stack:
+        condition: service_healthy
+    environment:
+      - PORT=${TASK_PORT:-3001}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-todo_db}
+      - REDIS_HOST=redis-stack
+      - REDIS_PORT=6379
+      - JWT_SECRET=${JWT_SECRET}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
+    volumes:
+      - ./task-service:/app
+      - /app/node_modules
+    networks:
+      - todo-network
+
+  frontend:
+    build:
+      context: ./todo-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - auth-service
+      - task-service
+    environment:
+      - VITE_AUTH_API_URL=${AUTH_API_URL:-http://localhost:3000/api}
+      - VITE_TASK_API_URL=${TASK_API_URL:-http://localhost:3001/api}
+    volumes:
+      - ./todo-frontend:/app
+      - /app/node_modules
+    networks:
+      - todo-network
+
+networks:
+  todo-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
